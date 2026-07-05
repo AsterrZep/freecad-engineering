@@ -191,20 +191,37 @@ slab.Placement = App.Placement(App.Vector(-4100, 0, -100), App.Rotation())
 floor.addObject(slab)
 ```
 
-### Muros (Wall) y Esquinas Limpias (Metodología de Croquis Paramétricos/Sketcher):
-* **El Enfoque Correcto:** Para que el plano 2D sea paramétrico y editable en el árbol del documento de FreeCAD, utiliza objetos `Sketcher::SketchObject` (croquis) en lugar de trazos de Draft.
-* **Construcción de Croquis:** Agrega líneas (`Part.LineSegment`) y asocia restricciones de coincidencia, horizontalidad, verticalidad y distancias. Esto permite que el usuario edite las dimensiones directamente haciendo doble clic en el croquis en la interfaz gráfica.
-* **Extrusión de Muros:** Pasa el objeto `Sketch` como `baseobj` al crear los muros. `Arch.makeWall` extruirá automáticamente la sección a lo largo del perfil 2D.
+### Muros (Wall) — Usar `Draft.makeWire` en lugar de Sketcher (Headless):
+
+> [!WARNING]
+> **No uses `Sketcher::SketchObject` para los perfiles base de muros en modo headless.** El solver de Sketcher puede emitir el error `Both points are equal` con restricciones de coincidencia en vértices comunes de una polilínea cerrada, generando **geometría degenerada** que extiende la bounding box del Shape2DView a valores incorrectos (p.ej., X hasta 12100 en vez de 4100). Esto produce el "descuadre" en el plano 2D y en TechDraw.
+
+* **Enfoque Correcto (Headless/Script):** Usa `Draft.makeWire` con una lista de vértices y `closed=True` para el perímetro exterior. No tiene solver, no falla.
+* **Extrusión de Muro:** Pasa el `Draft::Wire` como `baseobj` a `Arch.makeWall`. El resultado es idéntico pero sin errores.
+* **Alineación del muro:** Usa `wall.Align = "Center"` para que el muro se centre sobre la línea base.
 
 ```python
-# Crear un sketch paramétrico acotado y con restricciones
-sketch_ext = doc.addObject("Sketcher::SketchObject", "ExteriorWallSketch")
-# (Añadir segmentos de línea y aplicar restricciones de coincidencia y dimensión)
-# ...
+import Draft
+
+# Perímetro exterior: 8000x6000mm centrado en el origen
+pts_ext = [
+    App.Vector(-4000, -3000, 0),
+    App.Vector( 4000, -3000, 0),
+    App.Vector( 4000,  3000, 0),
+    App.Vector(-4000,  3000, 0),
+]
+wire_ext = Draft.makeWire(pts_ext, closed=True, face=False)
+doc.recompute()
+wall_outer = Arch.makeWall(wire_ext, width=200, height=3000, name="WallOuter")
+wall_outer.Align = "Center"
 doc.recompute()
 
-# Extruir el muro compuesto desde el Sketch
-wall_outer = Arch.makeWall(sketch_ext, width=200, height=3000, name="WallOuter")
+# Partición interior: segmento simple
+wire_vert = Draft.makeWire([App.Vector(0, -3000, 0), App.Vector(0, 3000, 0)])
+doc.recompute()
+wall_vert = Arch.makeWall(wire_vert, width=100, height=3000, name="WallVert")
+wall_vert.Align = "Center"
+doc.recompute()
 ```
 
 ### Puertas y Ventanas (WindowPresets):
@@ -238,34 +255,49 @@ Arch.addComponents(door, wall_partition)
 # 1. Crear el plano de corte
 section = Arch.makeSectionPlane(floor, name="FloorPlanCut")
 section.Placement = App.Placement(App.Vector(0, 0, 1500), App.Rotation())
+section.OnlySolids = False  # Incluir curvas 2D (arcos de puertas)
 doc.recompute()
 
-# 2. Generar vistas 2D alineadas
-visible_view = Draft.make_shape2dview(section)
-visible_view.InPlace = True
+# 2. Dos Shape2DViews con InPlace=True (coordenadas del mundo real)
+view_solid    = Draft.make_shape2dview(section)
+view_solid.InPlace = True
+view_solid.ProjectionMode = "Solid"     # Líneas visibles desde arriba
 
-cut_view = Draft.make_shape2dview(section)
-cut_view.InPlace = True
-cut_view.ProjectionMode = "Cutfaces"
+view_cutfaces = Draft.make_shape2dview(section)
+view_cutfaces.InPlace = True
+view_cutfaces.ProjectionMode = "Cutfaces"  # Relleno de sección
 doc.recompute()
 
-# 3. Exportar SVG directamente
-import importSVG
-importSVG.export([visible_view, cut_view], "/path/to/floor_plan.svg")
+# 3. CLAVE: fusionar en UN SOLO Part::Compound paramétrico
+# ⚠️ NO uses Part::Feature con .Shape asignado directamente —
+#    pierde la forma al siguiente doc.recompute() (no tiene DAG de dependencias).
+# ⚠️ NO uses dos DrawViewDraft separados en TechDraw —
+#    cada uno centra su vista en su propia bbox, causando el "descuadre".
+# ✅ Part::Compound con Links mantiene la referencia viva y persiste tras guardar/recargar.
+import Part
+compound = doc.addObject("Part::Compound", "FloorPlanCompound")
+compound.Links = [view_solid, view_cutfaces]
+doc.recompute()
+# Verificar bbox (debe coincidir con las dimensiones reales del edificio):
+# BBox X width ≈ largo del edificio, Y height ≈ ancho + swing arcs
 
-# 4. Exportar DXF vía TechDraw
+# 4. Una sola DrawViewPart en TechDraw (un solo bbox, cero desalineamiento)
 page = doc.addObject("TechDraw::DrawPage", "Page")
 template = doc.addObject("TechDraw::DrawSVGTemplate", "Template")
 template.Template = "/app/share/Mod/TechDraw/Templates/ISO/A3_Landscape_blank.svg"
 page.Template = template
 
-td_visible = doc.addObject("TechDraw::DrawViewDraft", "TD_VisibleView")
-td_visible.Source = visible_view
-page.addView(td_visible)
-td_visible.Scale = 0.02 # Escala 1:50
-
+td_view = doc.addObject("TechDraw::DrawViewPart", "TD_FloorPlan")
+td_view.Source     = [compound]
+td_view.Direction  = App.Vector(0, 0, -1)   # Vista desde arriba
+td_view.XDirection = App.Vector(1, 0, 0)    # X hacia la derecha
+td_view.Scale      = 0.02                   # Escala 1:50
+page.addView(td_view)
 doc.recompute()
-import TechDraw
+
+# 5. Exportar SVG y DXF
+import importSVG, TechDraw
+importSVG.export([view_solid, view_cutfaces], "/path/to/floor_plan.svg")
 TechDraw.writeDXFPage(page, "/path/to/floor_plan.dxf")
 ```
 
