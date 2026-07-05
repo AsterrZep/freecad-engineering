@@ -163,3 +163,86 @@ def patched_get_meshing_parameters(self):
 
 netgentools.NetgenTools.get_meshing_parameters = patched_get_meshing_parameters
 ```
+
+---
+
+## 6. Modelado Arquitectónico y BIM (Building Information Modeling)
+
+Para diseñar planos arquitectónicos y modelos 3D coordinados en FreeCAD de forma programática (Headless / Python API), se deben seguir las siguientes directrices y resolver los bugs conocidos de la API:
+
+### Estructura de Contenedores Espaciales (IFC):
+Organiza el modelo usando la jerarquía nativa de IFC: `Site -> Building -> Floor (Storey)`.
+```python
+import Arch
+site = Arch.makeSite(name="ProjectSite")
+building = Arch.makeBuilding(name="ProjectBuilding")
+floor = Arch.makeFloor(name="GroundFloor")
+
+site.addObject(building)
+building.addObject(floor)
+```
+
+### Losas de Piso (Slab/Structure):
+Usa `Arch.makeStructure` sin baseobj para definir una losa rectangular especificando dimensiones directas:
+```python
+slab = Arch.makeStructure(length=5000, width=4000, height=200, name="FloorSlab")
+slab.Placement = App.Placement(App.Vector(0, 0, -200), App.Rotation())
+floor.addObject(slab)
+```
+
+### Muros (Wall) y Esquinas Limpias:
+* Define muros con `Arch.makeWall()`.
+* **Esquinas sin Solapamiento:** Para que las uniones de muros no generen geometría duplicada (solapes), resta los espesores de los muros perpendiculares en las longitudes de los muros secundarios (ej. un muro de longitud $L - 2\cdot w$ para encajar entre dos paralelos).
+
+### Puertas y Ventanas (WindowPresets):
+* **Llamado Seguro:** Usa `Arch.makeWindowPreset` con tipos como `"Simple door"` o `"Open 1-pane"`.
+* **Parámetros sin Cero:** Los parámetros `width, height, h1, h2, w1, w2` deben ser estrictamente distintos de cero (`> 0`) para evitar excepciones de aborto.
+* **Bug Crítico de Placement:** La función `makeWindowPreset` de FreeCAD resetea el placement al origen internamente. **Solución:** Establece la propiedad `.Placement` del objeto *después* de crearlo.
+* **Orientación y Corte de Muro:** Las puertas/ventanas se crean horizontales (plano XY). Debes rotarlas para alinearlas a la vertical del muro y agregarlas al muro mediante `Arch.addComponents`.
+
+```python
+door = Arch.makeWindowPreset("Simple door", width=900, height=2100, h1=50, h2=50, h3=0, w1=100, w2=40, o1=0, o2=40)
+# Rotación de 90° en X para verticalidad en muro Bottom (eje X)
+door.Placement = App.Placement(App.Vector(-1000, -1900, 0), App.Rotation(App.Vector(1, 0, 0), 90))
+doc.recompute()
+Arch.addComponents(door, wall_bottom)
+```
+
+### Generación Headless de Planos 2D (DXF / SVG):
+1. **SectionPlane:** Inserta un plano de corte horizontal (`Arch.makeSectionPlane`) a una altura de $1.5$ metros (`Z = 1500`) sobre el nivel del suelo.
+2. **Draft Shape2DView:** Genera las proyecciones 2D (líneas vistas y caras cortadas `"Cutfaces"`).
+3. **Exportación SVG:** Usa `importSVG.export` directamente sobre las vistas 2D.
+4. **Exportación DXF:** Usa una plantilla SVG vacía en un `TechDraw::DrawPage` y expórtala de forma 100% headless con `TechDraw.writeDXFPage`.
+
+```python
+# 1. Crear el plano de corte
+section = Arch.makeSectionPlane(floor, name="FloorPlanCut")
+section.Placement = App.Placement(App.Vector(0, 0, 1500), App.Rotation())
+doc.recompute()
+
+# 2. Generar vistas 2D
+visible_view = Draft.make_shape2dview(section)
+cut_view = Draft.make_shape2dview(section)
+cut_view.ProjectionMode = "Cutfaces"
+doc.recompute()
+
+# 3. Exportar SVG directamente
+import importSVG
+importSVG.export([visible_view, cut_view], "/path/to/floor_plan.svg")
+
+# 4. Exportar DXF vía TechDraw
+page = doc.addObject("TechDraw::DrawPage", "Page")
+template = doc.addObject("TechDraw::DrawSVGTemplate", "Template")
+template.Template = "/app/share/Mod/TechDraw/Templates/ISO/A3_Landscape_blank.svg"
+page.Template = template
+
+td_visible = doc.addObject("TechDraw::DrawViewDraft", "TD_VisibleView")
+td_visible.Source = visible_view
+page.addView(td_visible)
+td_visible.Scale = 0.02 # Escala 1:50
+
+doc.recompute()
+import TechDraw
+TechDraw.writeDXFPage(page, "/path/to/floor_plan.dxf")
+```
+
