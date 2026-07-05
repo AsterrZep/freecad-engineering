@@ -256,6 +256,20 @@ import TechDraw
 TechDraw.writeDXFPage(page, "/path/to/floor_plan.dxf")
 ```
 
+### Simbología de Planta 2D (Arcos de Giro de Puertas):
+* **Proyección de Símbolos:** Las puertas verticales tienen su arco de giro (swing) en el plano vertical local, por lo que una proyección horizontal (`SectionPlane` mirando hacia abajo) proyectará el arco "de canto" como una simple línea recta.
+* **Solución Profesional:** Dibuja el arco de giro plano en el suelo ($Z = 0$) usando `Draft.make_circle` y especificando `startangle` y `endangle`. Asegúrate de desactivar `OnlySolids` en el `SectionPlane` (`section.OnlySolids = False`) para que las curvas y líneas 2D se proyecten en el plano final.
+
+```python
+# Crear un arco de 90° de radio 900 con centro en las bisagras (hinge)
+hinge_pos = App.Vector(-2450, -3000, 0)
+arc = Draft.make_circle(radius=900, face=False, startangle=0, endangle=90, placement=App.Placement(hinge_pos, App.Rotation()))
+floor.addObject(arc)
+
+# Habilitar proyección de curvas 2D en el plano de corte
+section.OnlySolids = False
+```
+
 ### Bocetos Base (Sketch) y Visibilidad Headless:
 * **¿Por qué aparecen planos en el suelo?** Al crear una ventana/puerta con `makeWindowPreset`, FreeCAD genera un `Sketch` base en el plano local XY que contiene el contorno 2D parametrizado. La extrusión 3D se genera y luego se posiciona verticalmente mediante el `.Placement` de la ventana, pero el croquis base original permanece tumbado en el origen XY. Esto es correcto y normal en el modelado paramétrico.
 * **Control de Visibilidad Headless:** Para ocultar estos croquis base en la vista 3D y evitar ruido visual, se debe desactivar su visibilidad. Sin embargo, en modo consola (headless), el objeto `ViewObject` (que controla la GUI) no existe (`None`), por lo que intentar acceder a él directamente causará un error. Utiliza siempre esta función de seguridad:
