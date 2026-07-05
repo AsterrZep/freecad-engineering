@@ -326,9 +326,9 @@ def inject_gui_document(fcstd_path):
     
     temp_zip = fcstd_path + ".tmp"
     with zipfile.ZipFile(fcstd_path, 'r') as zin, zipfile.ZipFile(temp_zip, 'w', zipfile.ZIP_DEFLATED) as zout:
-        for item in zin.infolist():
-            if item.filename != "GuiDocument.xml":
-                zout.writestr(item, zin.read(item.filename))
+        for filename in zin.namelist():
+            if filename != "GuiDocument.xml":
+                zout.writestr(filename, zin.read(filename))
         zout.writestr("GuiDocument.xml", xml_content)
     os.replace(temp_zip, fcstd_path)
 ```
