@@ -269,49 +269,62 @@ doc.recompute()
 
 ---
 
-## 7. Carga y Uso de Addons Mecánicos Externos (ej. FCGear)
+## 7. Carga y Uso de Addons Mecánicos Externos (FCGear)
 
-Para crear componentes mecánicos avanzados como engranajes rectos, helicoidales, cónicos o sinfines, se suelen usar Addons externos como `FCGear`.
+Para crear engranajes helicoidales, rectos, espina de pescado o cíclicos, usa el Addon `FCGear`.
 
-### Resolución de Dependencias y Rutas en Headless/Flatpak:
-1. **Carga del Namespace `freecad`:** Los Addons externos se registran bajo el namespace `freecad` (ej. `freecad.gears`). Si el addon está instalado en el host (`~/.local/share/FreeCAD/Mod/FCGear`) y se ejecuta bajo un contenedor sandbox como Flatpak, se debe extender manualmente el `__path__` del paquete `freecad` y agregar la ruta a `sys.path`.
-2. **Monkey-Patching de Librerías Faltantes (Bypass de `scipy`):** Algunos módulos auxiliares de addons externos importan dependencias grandes como `scipy` que no se encuentran en la instalación base. Si solo se desea generar geometrías de engranajes básicas (que no usan algoritmos de optimización de perfiles complejos de scipy), se puede engañar al importador de Python mockeando los módulos en `sys.modules`.
-
-```python
-import sys
-import os
-import unittest.mock as mock
-
-# 1. Bypassear la dependencia faltante de scipy
-sys.modules['scipy'] = mock.MagicMock()
-sys.modules['scipy.optimize'] = mock.MagicMock()
-
-# 2. Agregar el directorio base del Addon a sys.path para imports como 'import pygears'
-fcgear_base = "/home/aster/.local/share/FreeCAD/Mod/FCGear"
-if fcgear_base not in sys.path:
-    sys.path.append(fcgear_base)
-
-# 3. Importar freecad y extender su ruta de búsqueda para subpaquetes
-import freecad
-fcgear_addon = "/home/aster/.local/share/FreeCAD/Mod/FCGear/freecad"
-if fcgear_addon not in freecad.__path__:
-    freecad.__path__.append(fcgear_addon)
-
-# 4. Importar comandos y crear piezas
-from freecad.gears.commands import CreateInvoluteGear
-doc = App.newDocument("Gears")
-gear = CreateInvoluteGear.create()
+### Rutas Correctas en Flatpak (Verificado):
+En la instalación Flatpak oficial, los Addons de usuario se instalan en:
+```
+~/.var/app/org.freecad.FreeCAD/data/FreeCAD/v1-1/Mod/FCGear/
 ```
 
-### Propiedades y Nombres Clave en FCGear:
-Al modificar geometrías paramétricas de FCGear vía Python, los nombres clave de las propiedades son:
-* `num_teeth` (entero): Número de dientes (reemplaza a `teeth`).
-* `module` (longitud/float): Módulo del engranaje (ej. `2.0` o `"2.0 mm"`).
-* `height` (longitud/float): Espesor o ancho de cara (ej. `12.0`).
-* `helix_angle` (ángulo/float): Ángulo de hélice en grados (reemplaza a `beta`).
-* `double_helix` (booleano): Activa engranajes tipo espina de pescado (Herringbone).
-* `Placement.Base`: Posición espacial. Para engranar dos piezas con dientes corregidos, la distancia entre centros teórica es:
-  $$d = \frac{m \cdot (z_1 + z_2)}{2}$$
+### Importación Verificada en Headless:
+```python
+import sys
+
+# Ruta al addon instalado por el usuario (Flatpak)
+FCGEAR_PATH = "/home/aster/.var/app/org.freecad.FreeCAD/data/FreeCAD/v1-1/Mod/FCGear"
+if FCGEAR_PATH not in sys.path:
+    sys.path.insert(0, FCGEAR_PATH)
+
+# Importar directamente el módulo de engranajes involutos
+from freecad.gears.involutegear import InvoluteGear
+```
+
+> ⚠️ **No** uses `import FCGear` (no existe como módulo raíz).  
+> ⚠️ **No** uses `from freecad.gears.commands import CreateInvoluteGear` (falla por dependencia de `scipy` en `timinggear_t.py`).
+
+### Creación de Engranaje InvoluteGear:
+```python
+import FreeCAD as App
+doc = App.newDocument("Gears")
+
+pinion = doc.addObject("Part::FeaturePython", "Pinon")
+InvoluteGear(pinion)  # Inicializa el proxy Python del engranaje
+# Configurar propiedades ANTES del primer recompute
+pinion.num_teeth   = 14        # ✅ Correcto (no 'teeth')
+pinion.module      = 2.0
+pinion.helix_angle = 30.0      # ✅ Correcto (no 'beta')
+pinion.double_helix = True     # Activa perfil espina de pescado (Herringbone)
+pinion.height      = 20.0
+doc.recompute()
+```
+
+### Propiedades y Nombres Clave en FCGear (API verificada):
+| Propiedad | Tipo | Descripción |
+|---|---|---|
+| `num_teeth` | int | Número de dientes (**no** `teeth`) |
+| `module` | float | Módulo del engranaje [mm] |
+| `height` | float | Ancho de cara [mm] |
+| `helix_angle` | float | Ángulo helicoidal en grados (**no** `beta`) |
+| `double_helix` | bool | Perfil Herringbone/espina de pescado (**no** `HerringboneGear()`) |
+
+### Distancia entre Centros:
+Para dos engranajes conjugados que engranan correctamente, la distancia entre ejes es:
+```python
+center_dist = module * (z_pinion + z_wheel) / 2.0
+```
 
 ---
 
@@ -327,9 +340,13 @@ Para instanciar un elemento de unión:
 
 ```python
 import sys
-sys.path.append("/home/aster/.local/share/FreeCAD/Mod/Fasteners")
+# Ruta addon Fasteners (Flatpak)
+FASTENERS_PATH = "/home/aster/.var/app/org.freecad.FreeCAD/data/FreeCAD/v1-1/Mod/Fasteners"
+if FASTENERS_PATH not in sys.path:
+    sys.path.insert(0, FASTENERS_PATH)
 import FastenersCmd
 import ScrewMaker
+# ✅ ScrewMaker.Instance es auto-inicializado en la importación — NO llamar ScrewMaker.FastenerBase()
 
 doc = App.activeDocument()
 # Obtener el tipo de objeto para DIN933 (tornillo hexagonal)
