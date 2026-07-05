@@ -190,9 +190,19 @@ slab.Placement = App.Placement(App.Vector(0, 0, -200), App.Rotation())
 floor.addObject(slab)
 ```
 
-### Muros (Wall) y Esquinas Limpias:
-* Define muros con `Arch.makeWall()`.
-* **Esquinas sin Solapamiento:** Para que las uniones de muros no generen geometría duplicada (solapes), resta los espesores de los muros perpendiculares en las longitudes de los muros secundarios (ej. un muro de longitud $L - 2\cdot w$ para encajar entre dos paralelos).
+### Muros (Wall) y Esquinas Limpias (Metodología de Bocetos/Baselines):
+* **El Enfoque Correcto:** En lugar de crear muros individuales independientes y calcular sus coordenadas de esquina manualmente (lo cual es propenso a errores y solapamientos), la metodología BIM recomendada en FreeCAD es definir primero croquis o líneas base 2D (ej. un `Draft.make_rectangle` para el perímetro exterior y `Draft.make_wire` para tabiques internos).
+* **Extrusión de Muros:** Pasa estos baselines como `baseobj` al crear los muros. `Arch.makeWall` extruirá automáticamente la sección a lo largo del perfil 2D y unirá las esquinas de forma limpia y paramétrica.
+* **Inserción de Aberturas:** Añade las puertas y ventanas directamente al muro compuesto generado. FreeCAD calculará e intersectará automáticamente los vanos.
+
+```python
+# Crear línea base 2D (ej. Rectángulo para muro perimetral)
+rect_placement = App.Placement(App.Vector(-2500, -2000, 0), App.Rotation())
+rect = Draft.make_rectangle(length=5000, height=4000, placement=rect_placement, face=False)
+
+# Crear muro compuesto a lo largo de la línea base
+wall_outer = Arch.makeWall(rect, width=200, height=3000, name="WallOuter")
+```
 
 ### Puertas y Ventanas (WindowPresets):
 * **Llamado Seguro:** Usa `Arch.makeWindowPreset` con tipos como `"Simple door"` o `"Open 1-pane"`.
@@ -202,10 +212,10 @@ floor.addObject(slab)
 
 ```python
 door = Arch.makeWindowPreset("Simple door", width=900, height=2100, h1=50, h2=50, h3=0, w1=100, w2=40, o1=0, o2=40)
-# Rotación de 90° en X para verticalidad en muro Bottom (eje X)
-door.Placement = App.Placement(App.Vector(-1000, -1900, 0), App.Rotation(App.Vector(1, 0, 0), 90))
+# Rotación de 90° en X para colocar en el muro Bottom (paralelo a eje X, Y=-2000)
+door.Placement = App.Placement(App.Vector(-1000, -2000, 0), App.Rotation(App.Vector(1, 0, 0), 90))
 doc.recompute()
-Arch.addComponents(door, wall_bottom)
+Arch.addComponents(door, wall_outer)
 ```
 
 ### Generación Headless de Planos 2D (DXF / SVG):
