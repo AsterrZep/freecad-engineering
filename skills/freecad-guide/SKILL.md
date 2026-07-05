@@ -183,39 +183,45 @@ building.addObject(floor)
 ```
 
 ### Losas de Piso (Slab/Structure):
-Usa `Arch.makeStructure` sin baseobj para definir una losa rectangular especificando dimensiones directas:
+* **Alineación Perimetral:** La losa de cimentación debe cubrir todo el contorno exterior de los muros para evitar que estos "cuelguen" o queden vacíos debajo.
+* Si el muro perimetral es de $8000 \times 6000\text{ mm}$ con espesor de $200\text{ mm}$ (centrado en la línea base), las caras exteriores del muro estarán en $8200 \times 6200\text{ mm}$. La losa de piso debe coincidir con estas dimensiones exactas:
 ```python
-slab = Arch.makeStructure(length=5000, width=4000, height=200, name="FloorSlab")
-slab.Placement = App.Placement(App.Vector(0, 0, -200), App.Rotation())
+slab = Arch.makeStructure(length=8200, width=6200, height=200, name="FloorSlab")
+slab.Placement = App.Placement(App.Vector(-4100, 0, -100), App.Rotation())
 floor.addObject(slab)
 ```
 
-### Muros (Wall) y Esquinas Limpias (Metodología de Bocetos/Baselines):
-* **El Enfoque Correcto:** En lugar de crear muros individuales independientes y calcular sus coordenadas de esquina manualmente (lo cual es propenso a errores y solapamientos), la metodología BIM recomendada en FreeCAD es definir primero croquis o líneas base 2D (ej. un `Draft.make_rectangle` para el perímetro exterior y `Draft.make_wire` para tabiques internos).
-* **Extrusión de Muros:** Pasa estos baselines como `baseobj` al crear los muros. `Arch.makeWall` extruirá automáticamente la sección a lo largo del perfil 2D y unirá las esquinas de forma limpia y paramétrica.
-* **Inserción de Aberturas:** Añade las puertas y ventanas directamente al muro compuesto generado. FreeCAD calculará e intersectará automáticamente los vanos.
+### Muros (Wall) y Esquinas Limpias (Metodología de Croquis Paramétricos/Sketcher):
+* **El Enfoque Correcto:** Para que el plano 2D sea paramétrico y editable en el árbol del documento de FreeCAD, utiliza objetos `Sketcher::SketchObject` (croquis) en lugar de trazos de Draft.
+* **Construcción de Croquis:** Agrega líneas (`Part.LineSegment`) y asocia restricciones de coincidencia, horizontalidad, verticalidad y distancias. Esto permite que el usuario edite las dimensiones directamente haciendo doble clic en el croquis en la interfaz gráfica.
+* **Extrusión de Muros:** Pasa el objeto `Sketch` como `baseobj` al crear los muros. `Arch.makeWall` extruirá automáticamente la sección a lo largo del perfil 2D.
 
 ```python
-# Crear línea base 2D (ej. Rectángulo para muro perimetral)
-rect_placement = App.Placement(App.Vector(-2500, -2000, 0), App.Rotation())
-rect = Draft.make_rectangle(length=5000, height=4000, placement=rect_placement, face=False)
+# Crear un sketch paramétrico acotado y con restricciones
+sketch_ext = doc.addObject("Sketcher::SketchObject", "ExteriorWallSketch")
+# (Añadir segmentos de línea y aplicar restricciones de coincidencia y dimensión)
+# ...
+doc.recompute()
 
-# Crear muro compuesto a lo largo de la línea base
-wall_outer = Arch.makeWall(rect, width=200, height=3000, name="WallOuter")
+# Extruir el muro compuesto desde el Sketch
+wall_outer = Arch.makeWall(sketch_ext, width=200, height=3000, name="WallOuter")
 ```
 
 ### Puertas y Ventanas (WindowPresets):
 * **Llamado Seguro:** Usa `Arch.makeWindowPreset` con tipos como `"Simple door"` o `"Open 1-pane"`.
 * **Parámetros sin Cero:** Los parámetros `width, height, h1, h2, w1, w2` deben ser estrictamente distintos de cero (`> 0`) para evitar excepciones de aborto.
 * **Bug Crítico de Placement:** La función `makeWindowPreset` de FreeCAD resetea el placement al origen internamente. **Solución:** Establece la propiedad `.Placement` del objeto *después* de crearlo.
-* **Orientación y Corte de Muro:** Las puertas/ventanas se crean horizontales (plano XY). Debes rotarlas para alinearlas a la vertical del muro y agregarlas al muro mediante `Arch.addComponents`.
+* **Orientación e Inversión de Giro:** Las puertas/ventanas se crean horizontales (plano XY). Debes rotarlas para alinearlas a la vertical del muro. 
+  * Para cambiar el sentido de apertura (ej. que abra hacia adentro en la dirección de las Y negativas), **NO** uses una rotación de $-90^\circ$ en X, ya que esto volcará la puerta hacia abajo (cota Z negativa).
+  * **Solución Correcta:** Rota la puerta $90^\circ$ en X, multiplica por una rotación de $180^\circ$ en Z, y ajusta la posición de su placement (offset de bisagra) para encajarla en el vano correspondiente.
 
 ```python
-door = Arch.makeWindowPreset("Simple door", width=900, height=2100, h1=50, h2=50, h3=0, w1=100, w2=40, o1=0, o2=40)
-# Rotación de 90° en X para colocar en el muro Bottom (paralelo a eje X, Y=-2000)
-door.Placement = App.Placement(App.Vector(-1000, -2000, 0), App.Rotation(App.Vector(1, 0, 0), 90))
+door = Arch.makeWindowPreset("Simple door", width=800, height=2100, h1=50, h2=50, h3=0, w1=100, w2=40, o1=0, o2=40)
+# Rotación combinada de 90° en X y 180° en Z para abrir hacia el interior del baño (Y negativo)
+door_rot = App.Rotation(App.Vector(0, 0, 1), 180) * App.Rotation(App.Vector(1, 0, 0), 90)
+door.Placement = App.Placement(App.Vector(3400, 0, 0), door_rot)
 doc.recompute()
-Arch.addComponents(door, wall_outer)
+Arch.addComponents(door, wall_partition)
 ```
 
 ### Generación Headless de Planos 2D (DXF / SVG):
