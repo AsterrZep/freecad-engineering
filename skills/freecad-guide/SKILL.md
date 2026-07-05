@@ -393,7 +393,38 @@ class GearAnimator(QtWidgets.QDialog):
 
 ---
 
-## 10. Parches y Limitaciones de Entorno (Flatpak / Sandboxing)
+## 10. Exportación y Validación de Calidad Geométrica (STEP / STL)
+
+La exportación correcta y validación topológica son fundamentales para flujos de manufactura asistida (CAM, Impresión 3D).
+
+### Exportación STEP / IGES (CAD Neutral):
+Utiliza el módulo `Import` nativo para exportar sólidos con sus metadatos intactos:
+```python
+import Import
+# Exporta una lista de objetos a un archivo STEP
+Import.export([box, pinion], "/path/to/project_assembly.step")
+```
+
+### Conversión a Malla Poligonal (Mesh) y Exportación STL:
+Usa el módulo `MeshPart` para convertir sólidos geométricos exactos (B-Rep) en mallas de triángulos trianguladas (facets) con tolerancias específicas:
+```python
+import MeshPart
+# Parámetros: Sólido, Max Longitud de Borde, Desviación de Superficie
+mesh_data = MeshPart.meshFromShape(box.Shape, MaxLength=2.0, SurfaceDeviation=0.01)
+
+# Guardar malla en formato STL
+mesh_data.write("/path/to/output_mesh.stl")
+```
+
+### Validación Topológica Automática:
+Antes de la exportación a STL para impresión 3D, puedes validar programáticamente la calidad de la malla resultante para evitar fallos de impresión:
+* **Malla Sólida Cerrada (Water-tight/Manifold):** `mesh_data.isSolid()` (Retorna `True` si es un volumen cerrado sin agujeros).
+* **Ausencia de Aristas No-Manifold:** `mesh_data.hasNonManifolds()` (Retorna `True` si hay aristas compartidas por más de dos facetas).
+* **Ausencia de Auto-intersecciones:** `mesh_data.hasSelfIntersections()` (Retorna `True` si las facetas se intersecan entre sí).
+
+---
+
+## 11. Parches y Limitaciones de Entorno (Flatpak / Sandboxing)
 
 En entornos Flatpak, el backend de Netgen puede fallar al convertir parámetros booleanos o flotantes en la capa C++ de `pybind11` (`MeshingParameters`).
 
