@@ -289,4 +289,42 @@ def set_visibility_safe(obj, visible=False):
 set_visibility_safe(door.Base, False)
 ```
 
+### Inyección de GuiDocument.xml en Modo Headless (Fijar Visibilidades para la GUI):
+* **El Problema:** Al guardar un archivo `.FCStd` desde consola (`FreeCADCmd`), FreeCAD omite la creación del archivo `GuiDocument.xml` dentro del archivo ZIP. Al abrir el archivo en la aplicación de escritorio (GUI), FreeCAD regenera los valores predeterminados, lo que causa que contenedores (como `BuildingPart`) se inicialicen como **ocultos** (grayed out) y los bocetos base de ventanas/puertas como **visibles** (mostrándose como molestos cuadros planos en el viewport).
+* **La Solución:** Escribe un inyector programático de metadatos ZIP al final de tus scripts de automatización para generar un `GuiDocument.xml` correcto y empaquetarlo en el `.FCStd`.
+
+```python
+import zipfile
+import re
+import os
+
+def inject_gui_document(fcstd_path):
+    with zipfile.ZipFile(fcstd_path, 'r') as archive:
+        doc_xml = archive.read("Document.xml").decode("utf-8")
+    object_names = re.findall(r'<Object\s+name="([^"]+)"', doc_xml)
+    
+    visible_list = [n for n in object_names if not any(x in n for x in ["Sketch", "ExteriorWall", "InteriorWall"])]
+    hidden_list = [n for n in object_names if any(x in n for x in ["Sketch", "ExteriorWall", "InteriorWall"])]
+    
+    xml_content = f"""<?xml version='1.0' encoding='utf-8'?>
+<Document SchemaVersion="1" HasExpansion="1">
+    <Expand />
+    <ViewProviderData Count="{len(object_names)}">
+"""
+    for name in visible_list:
+        xml_content += f'        <ViewProvider name="{name}"><Properties Count="1"><Property name="Visibility" type="App::PropertyBool"><Bool value="true"/></Property></Properties></ViewProvider>\n'
+    for name in hidden_list:
+        xml_content += f'        <ViewProvider name="{name}"><Properties Count="1"><Property name="Visibility" type="App::PropertyBool"><Bool value="false"/></Property></Properties></ViewProvider>\n'
+    xml_content += "    </ViewProviderData>\n</Document>\n"
+    
+    temp_zip = fcstd_path + ".tmp"
+    with zipfile.ZipFile(fcstd_path, 'r') as zin, zipfile.ZipFile(temp_zip, 'w', zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            if item.filename != "GuiDocument.xml":
+                zout.writestr(item, zin.read(item.filename))
+        zout.writestr("GuiDocument.xml", xml_content)
+    os.replace(temp_zip, fcstd_path)
+```
+
+
 
