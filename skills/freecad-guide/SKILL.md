@@ -106,7 +106,7 @@ El banco de trabajo FEM interactúa con solvers (CalculiX) y generadores de mall
 
 ### Sincronización y Ciclo de Vida del Subproceso:
 * **Falta de Event Loop en Consola:** Cuando ejecutas FreeCAD mediante `-c` (sin interfaz Qt), los métodos asíncronos y los bucles basados en `QProcess.state()` no reciben eventos del loop de Qt. El objeto de malla o resolvedor puede ser destruido por el recolector de basura antes de completar la ejecución en disco.
-* **Solución Síncrona:** Espera activamente la ejecución del proceso invocando `waitForStarted(5000)` and `waitForFinished(-1)` sobre el objeto `process` del resolvedor/mesher.
+* **Solución Síncrona:** Espera activamente la ejecución del proceso invocando `waitForStarted(5000)` y `waitForFinished(-1)` sobre el objeto `process` del resolvedor/mesher.
 
 ```python
 from femmesh import netgentools
@@ -165,7 +165,7 @@ fcgear_base = "/home/aster/.local/share/FreeCAD/Mod/FCGear"
 if fcgear_base not in sys.path:
     sys.path.append(fcgear_base)
 
-# 3. Importar freecad y extender su ruta de búsqueda para subpaquetes
+# 3. Importar freecad and extender su ruta de búsqueda para subpaquetes
 import freecad
 fcgear_addon = "/home/aster/.local/share/FreeCAD/Mod/FCGear/freecad"
 if fcgear_addon not in freecad.__path__:
@@ -232,7 +232,42 @@ doc.recompute()
 
 ---
 
-## 7. Parches y Limitaciones de Entorno (Flatpak / Sandboxing)
+## 7. Creación de Animaciones Mecánicas en FreeCAD
+
+Para animar piezas móviles acopladas (como engranajes mesheados) vinculando sus posiciones angulares:
+
+### Configuración del Mapeo de Rotaciones por Expresión:
+1. **Configuración de Ejes:** Define el eje de rotación de cada componente en su propiedad `Placement.Rotation.Axis` (usualmente `App.Vector(0, 0, 1)` para el plano XY).
+2. **Control por Celda de Spreadsheet:** Crea una celda alias (ej. `angle`) en Spreadsheet con el ángulo de entrada actual.
+3. **Expresión del Conductor (Pinión):** Vincula el ángulo de rotación del conductor directamente al Spreadsheet:
+   ```python
+   conductor.setExpression("Placement.Rotation.Angle", "Spreadsheet.angle")
+   ```
+4. **Expresión del Conducido (Mating Gear):** El conducido debe rotar en dirección opuesta con la relación de transmisión inversa y, si es necesario, un desfase de medio paso (half-pitch offset) en grados para evitar la colisión visual inicial de los dientes:
+   ```python
+   conducido.setExpression("Placement.Rotation.Angle", "-Spreadsheet.angle * (teeth_pinion / teeth_gear) + phase_shift")
+   ```
+
+### Automatización con Macro GUI (PySide + QTimer):
+Para ejecutar la animación de forma interactiva en la interfaz gráfica, se utiliza un script de Macro (`.FCMacro`) con una pequeña ventana Qt que controle el temporizador sin bloquear el hilo principal de FreeCAD:
+
+```python
+from PySide import QtCore, QtWidgets
+import FreeCAD as App
+
+class GearAnimator(QtWidgets.QDialog):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Control de Animación")
+        self.setWindowFlags(QtCore.Qt.Window | QtCore.Qt.WindowStaysOnTopHint)
+        # Configurar botones Play, Pause, Reset y QTimer
+        # que incrementan periódicamente doc.Spreadsheet.angle y llaman a doc.recompute()
+        ...
+```
+
+---
+
+## 8. Parches y Limitaciones de Entorno (Flatpak / Sandboxing)
 
 En entornos Flatpak, el backend de Netgen puede fallar al convertir parámetros booleanos o flotantes en la capa C++ de `pybind11` (`MeshingParameters`).
 
