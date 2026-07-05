@@ -75,7 +75,7 @@ valor_evaluado = float(sheet.get("B2"))
 TechDraw permite proyectar geometrías 3D en planos 2D normalizados.
 
 ### Configuración Correcta de Vistas en Python:
-* **Asociación de Plantilla Oro:** Antes de añadir cualquier vista a la página con `page.addView(view)`, la página debe tener cargada una plantilla (`page.Template = template`). De lo contrario, se lanzará una excepción.
+* **Asociación de Plantilla Obligatoria:** Antes de añadir cualquier vista a la página con `page.addView(view)`, la página debe tener cargada una plantilla (`page.Template = template`). De lo contrario, se lanzará una excepción.
 * **Orientación de la Vista:** La clase `TechDraw::DrawViewPart` no tiene la propiedad `UpDirection`. En su lugar, utiliza:
   * `Direction`: El vector de dirección de proyección normal a la hoja (ej. `App.Vector(0, -1, 0)`).
   * `XDirection`: El vector de dirección horizontal de la vista en la página (ej. `App.Vector(1, 0, 0)`).
@@ -197,7 +197,79 @@ Una vez resuelto el análisis, CalculiX crea un objeto en el documento con el no
 
 ---
 
-## 6. Carga y Uso de Addons Mecánicos Externos (ej. FCGear)
+## 6. Automatización de Ensamblajes (Addon A2plus)
+
+El Addon `A2plus` permite restringir el movimiento relativo de piezas (ej. coaxialidad, contacto plano, distancia) para definir ensamblajes mecánicos.
+
+### Reglas Críticas para la Ejecución Headless:
+Al ser A2plus una herramienta altamente orientada a la interfaz gráfica, se requieren tres monkey-patches al inicio del script para evitar fallos de PySide y FreeCADGui en consola:
+1. **Mocks de FreeCADGui:** El solver de A2plus llama a métodos de registro de comandos y de limpieza de selecciones en la GUI.
+2. **Mock de QMessageBox:** El solver abre diálogos emergentes informativos si existen piezas flotantes. Deben simularse con `mock.MagicMock()` para evitar el error `Must construct a QApplication before a QWidget`.
+3. **No-op para setupProxies:** Las restricciones crean representaciones visuales (ViewProviders) en la GUI que fallan en consola porque `ViewObject` es `None`. Se desactiva anulando `setupProxies`.
+
+```python
+import sys
+import unittest.mock as mock
+import FreeCADGui
+
+# 1. Mockear la interfaz gráfica
+FreeCADGui.addCommand = mock.MagicMock()
+FreeCADGui.Selection = mock.MagicMock()
+
+# 2. Mockear diálogos emergentes de PySide
+from PySide import QtGui
+QtGui.QMessageBox.information = mock.MagicMock()
+QtGui.QMessageBox.critical = mock.MagicMock()
+
+# 3. Cargar A2plus y anular creación de ViewProviders de restricciones
+a2p_path = "/home/aster/.var/app/org.freecad.FreeCAD/data/FreeCAD/v1-1/Mod/A2plus"
+sys.path.append(a2p_path)
+import a2p_constraints
+import a2p_solversystem
+a2p_constraints.BasicConstraint.setupProxies = lambda self: None
+```
+
+### Regla del Anclaje Estático (fixedPosition):
+Por defecto, el resolvedor de A2plus requiere que **al menos una pieza esté fija** en el espacio para servir de origen al sistema de ecuaciones. Si no hay piezas fijas (o todas están declaradas como flotantes), el solver de A2plus terminará exitosamente pero **no moverá ninguna pieza**.
+* Debes inyectar la propiedad booleana `fixedPosition` a todos los sólidos involucrados.
+* Define `fixedPosition = True` para la base o eje estático.
+* Define `fixedPosition = False` para las piezas móviles.
+
+```python
+# Declarar eje estático
+shaft.addProperty("App::PropertyBool", "fixedPosition", "Assembly")
+shaft.fixedPosition = True
+
+# Declarar pieza móvil
+bracket.addProperty("App::PropertyBool", "fixedPosition", "Assembly")
+bracket.fixedPosition = False
+```
+
+### Selección por Código y Resolución:
+Dado que no existe selección por clic en modo headless, debes simular las selecciones de caras/bordes que interactúan usando una clase mock que exponga los atributos requeridos por A2plus:
+
+```python
+class MockSelection:
+    def __init__(self, obj, sub_element):
+        self.ObjectName = obj.Name
+        self.Object = obj
+        self.SubElementNames = [sub_element]  # Ej. ["Face1"]
+
+# Enlazar cara cilíndrica del eje con la cara interior del soporte
+s1 = MockSelection(shaft, "Face1")
+s2 = MockSelection(bracket, "Face5")
+
+# Crear la restricción axial (coaxialidad)
+constraint = a2p_constraints.AxialConstraint([s1, s2])
+
+# Resolver el ensamblaje síncronamente
+a2p_solversystem.solveConstraints(doc)
+doc.recompute()
+```
+
+---
+
+## 7. Carga y Uso de Addons Mecánicos Externos (ej. FCGear)
 
 Para crear componentes mecánicos avanzados como engranajes rectos, helicoidales, cónicos o sinfines, se suelen usar Addons externos como `FCGear`.
 
@@ -243,7 +315,7 @@ Al modificar geometrías paramétricas de FCGear vía Python, los nombres clave 
 
 ---
 
-## 7. Automatización de Elementos de Unión (Addon Fasteners)
+## 8. Automatización de Elementos de Unión (Addon Fasteners)
 
 El Addon `Fasteners` permite crear tornillos, pernos, tuercas, arandelas y pasadores normalizados bajo estándares internacionales (ISO, DIN, ASME, etc.).
 
@@ -286,7 +358,7 @@ doc.recompute()
 
 ---
 
-## 8. Creación de Animaciones Mecánicas en FreeCAD
+## 9. Creación de Animaciones Mecánicas en FreeCAD
 
 Para animar piezas móviles acopladas (como engranajes mesheados) vinculando sus posiciones angulares:
 
@@ -321,7 +393,7 @@ class GearAnimator(QtWidgets.QDialog):
 
 ---
 
-## 9. Parches y Limitaciones de Entorno (Flatpak / Sandboxing)
+## 10. Parches y Limitaciones de Entorno (Flatpak / Sandboxing)
 
 En entornos Flatpak, el backend de Netgen puede fallar al convertir parámetros booleanos o flotantes en la capa C++ de `pybind11` (`MeshingParameters`).
 
