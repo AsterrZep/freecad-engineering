@@ -246,3 +246,17 @@ import TechDraw
 TechDraw.writeDXFPage(page, "/path/to/floor_plan.dxf")
 ```
 
+### Bocetos Base (Sketch) y Visibilidad Headless:
+* **¿Por qué aparecen planos en el suelo?** Al crear una ventana/puerta con `makeWindowPreset`, FreeCAD genera un `Sketch` base en el plano local XY que contiene el contorno 2D parametrizado. La extrusión 3D se genera y luego se posiciona verticalmente mediante el `.Placement` de la ventana, pero el croquis base original permanece tumbado en el origen XY. Esto es correcto y normal en el modelado paramétrico.
+* **Control de Visibilidad Headless:** Para ocultar estos croquis base en la vista 3D y evitar ruido visual, se debe desactivar su visibilidad. Sin embargo, en modo consola (headless), el objeto `ViewObject` (que controla la GUI) no existe (`None`), por lo que intentar acceder a él directamente causará un error. Utiliza siempre esta función de seguridad:
+
+```python
+def set_visibility_safe(obj, visible=False):
+    if hasattr(obj, "ViewObject") and obj.ViewObject is not None:
+        obj.ViewObject.Visibility = visible
+
+# Ocultar el croquis base de forma segura
+set_visibility_safe(door.Base, False)
+```
+
+
