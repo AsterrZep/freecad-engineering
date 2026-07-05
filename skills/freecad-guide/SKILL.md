@@ -79,7 +79,7 @@ TechDraw permite proyectar geometrías 3D en planos 2D normalizados.
 * **Orientación de la Vista:** La clase `TechDraw::DrawViewPart` no tiene la propiedad `UpDirection`. En su lugar, utiliza:
   * `Direction`: El vector de dirección de proyección normal a la hoja (ej. `App.Vector(0, -1, 0)`).
   * `XDirection`: El vector de dirección horizontal de la vista en la página (ej. `App.Vector(1, 0, 0)`).
-* **Filtros y Métodos Geométricos:** Utiliza `view.getVisibleEdges()` y `view.getHiddenEdges()` para interactuar programáticamente con las aristas proyectadas (evita el atributo inexistente `GeometryLines`).
+* **Filtros y Métodos Geométricos:** Utiliza `view.getVisibleEdges()` and `view.getHiddenEdges()` para interactuar programáticamente con las aristas proyectadas (evita el atributo inexistente `GeometryLines`).
 
 ```python
 import TechDraw
@@ -143,7 +143,53 @@ if nt.process.exitCode() == 0:
 
 ---
 
-## 5. Parches y Limitaciones de Entorno (Flatpak / Sandboxing)
+## 5. Carga y Uso de Addons Mecánicos Externos (ej. FCGear)
+
+Para crear componentes mecánicos avanzados como engranajes rectos, helicoidales, cónicos o sinfines, se suelen usar Addons externos como `FCGear`.
+
+### Resolución de Dependencias y Rutas en Headless/Flatpak:
+1. **Carga del Namespace `freecad`:** Los Addons externos se registran bajo el namespace `freecad` (ej. `freecad.gears`). Si el addon está instalado en el host (`~/.local/share/FreeCAD/Mod/FCGear`) y se ejecuta bajo un contenedor sandbox como Flatpak, se debe extender manualmente el `__path__` del paquete `freecad` y agregar la ruta a `sys.path`.
+2. **Monkey-Patching de Librerías Faltantes (Bypass de `scipy`):** Algunos módulos auxiliares de addons externos importan dependencias grandes como `scipy` que no se encuentran en la instalación base. Si solo se desea generar geometrías de engranajes básicas (que no usan algoritmos de optimización de perfiles complejos de scipy), se puede engañar al importador de Python mockeando los módulos en `sys.modules`.
+
+```python
+import sys
+import os
+import unittest.mock as mock
+
+# 1. Bypassear la dependencia faltante de scipy
+sys.modules['scipy'] = mock.MagicMock()
+sys.modules['scipy.optimize'] = mock.MagicMock()
+
+# 2. Agregar el directorio base del Addon a sys.path para imports como 'import pygears'
+fcgear_base = "/home/aster/.local/share/FreeCAD/Mod/FCGear"
+if fcgear_base not in sys.path:
+    sys.path.append(fcgear_base)
+
+# 3. Importar freecad y extender su ruta de búsqueda para subpaquetes
+import freecad
+fcgear_addon = "/home/aster/.local/share/FreeCAD/Mod/FCGear/freecad"
+if fcgear_addon not in freecad.__path__:
+    freecad.__path__.append(fcgear_addon)
+
+# 4. Importar comandos y crear piezas
+from freecad.gears.commands import CreateInvoluteGear
+doc = App.newDocument("Gears")
+gear = CreateInvoluteGear.create()
+```
+
+### Propiedades y Nombres Clave en FCGear:
+Al modificar geometrías paramétricas de FCGear vía Python, los nombres clave de las propiedades son:
+* `num_teeth` (entero): Número de dientes (reemplaza a `teeth`).
+* `module` (longitud/float): Módulo del engranaje (ej. `2.0` o `"2.0 mm"`).
+* `height` (longitud/float): Espesor o ancho de cara (ej. `12.0`).
+* `helix_angle` (ángulo/float): Ángulo de hélice en grados (reemplaza a `beta`).
+* `double_helix` (booleano): Activa engranajes tipo espina de pescado (Herringbone).
+* `Placement.Base`: Posición espacial. Para engranar dos piezas con dientes corregidos, la distancia entre centros teórica es:
+  $$d = \frac{m \cdot (z_1 + z_2)}{2}$$
+
+---
+
+## 6. Parches y Limitaciones de Entorno (Flatpak / Sandboxing)
 
 En entornos Flatpak, el backend de Netgen puede fallar al convertir parámetros booleanos o flotantes en la capa C++ de `pybind11` (`MeshingParameters`).
 
