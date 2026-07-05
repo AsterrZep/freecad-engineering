@@ -168,42 +168,59 @@ netgentools.NetgenTools.get_meshing_parameters = patched_get_meshing_parameters
 
 ## 6. Modelado Arquitectónico y BIM (Building Information Modeling)
 
-Para diseñar planos arquitectónicos y modelos 3D coordinados en FreeCAD de forma programática (Headless / Python API), se deben seguir las siguientes directrices y resolver los bugs conocidos de la API:
+Guía completa y validada para crear planos arquitectónicos 2D + modelos 3D en FreeCAD desde script Python (headless / `FreeCADCmd`). Cada regla ha sido **probada** y documentada a partir de errores reales encontrados durante el desarrollo.
 
-### Estructura de Contenedores Espaciales (IFC):
-Organiza el modelo usando la jerarquía nativa de IFC: `Site -> Building -> Floor (Storey)`.
+> [!IMPORTANT]
+> **Flujo de trabajo correcto (resumen ejecutivo):**
+> `Draft.makeWire` → `Arch.makeWall` → `Arch.makeSectionPlane` → `Draft.make_shape2dview` ×2 → `Part::Compound` → `TechDraw::DrawViewPart`
+
+---
+
+### 6.1 Jerarquía Espacial IFC (Site → Building → Floor)
+
 ```python
 import Arch
-site = Arch.makeSite(name="ProjectSite")
+
+site     = Arch.makeSite(name="ProjectSite")
 building = Arch.makeBuilding(name="ProjectBuilding")
-floor = Arch.makeFloor(name="GroundFloor")
+floor    = Arch.makeFloor(name="GroundFloor")
 
 site.addObject(building)
 building.addObject(floor)
 ```
 
-### Losas de Piso (Slab/Structure):
-* **Alineación Perimetral:** La losa de cimentación debe cubrir todo el contorno exterior de los muros para evitar que estos "cuelguen" o queden vacíos debajo.
-* Si el muro perimetral es de $8000 \times 6000\text{ mm}$ con espesor de $200\text{ mm}$ (centrado en la línea base), las caras exteriores del muro estarán en $8200 \times 6200\text{ mm}$. La losa de piso debe coincidir con estas dimensiones exactas:
+---
+
+### 6.2 Losa de Piso (Structure / Slab)
+
+La losa debe **coincidir exactamente** con la huella exterior de los muros para que no queden huecos debajo de las paredes.
+
+| Muro perimetral | Espesor | Cara exterior | Losa necesaria |
+|---|---|---|---|
+| 8000 × 6000 mm | 200 mm centrado | ±4100, ±3100 | 8200 × 6200 mm |
+
 ```python
 slab = Arch.makeStructure(length=8200, width=6200, height=200, name="FloorSlab")
+# Centrar la losa: XMin=-4100, Y centrado, Z de -100 a 0
 slab.Placement = App.Placement(App.Vector(-4100, 0, -100), App.Rotation())
 floor.addObject(slab)
+doc.recompute()
 ```
 
-### Muros (Wall) — Usar `Draft.makeWire` en lugar de Sketcher (Headless):
+---
+
+### 6.3 Muros — `Draft.makeWire` (NO Sketcher en headless)
 
 > [!WARNING]
-> **No uses `Sketcher::SketchObject` para los perfiles base de muros en modo headless.** El solver de Sketcher puede emitir el error `Both points are equal` con restricciones de coincidencia en vértices comunes de una polilínea cerrada, generando **geometría degenerada** que extiende la bounding box del Shape2DView a valores incorrectos (p.ej., X hasta 12100 en vez de 4100). Esto produce el "descuadre" en el plano 2D y en TechDraw.
+> **NUNCA uses `Sketcher::SketchObject` como perfil base de muros en modo headless.**
+> El solver de Sketcher emite `Both points are equal` con restricciones de coincidencia en vértices compartidos de una polilínea cerrada, generando **geometría degenerada**. La bounding box del Shape2DView resultante se extiende a valores absurdos (p.ej., X=12100 en lugar de 4100), produciendo el "descuadre" visible en TechDraw.
 
-* **Enfoque Correcto (Headless/Script):** Usa `Draft.makeWire` con una lista de vértices y `closed=True` para el perímetro exterior. No tiene solver, no falla.
-* **Extrusión de Muro:** Pasa el `Draft::Wire` como `baseobj` a `Arch.makeWall`. El resultado es idéntico pero sin errores.
-* **Alineación del muro:** Usa `wall.Align = "Center"` para que el muro se centre sobre la línea base.
+**✅ Correcto — `Draft.makeWire`** (sin solver, sin errores):
 
 ```python
 import Draft
 
-# Perímetro exterior: 8000x6000mm centrado en el origen
+# Perímetro exterior: 8000×6000 mm centrado en el origen
 pts_ext = [
     App.Vector(-4000, -3000, 0),
     App.Vector( 4000, -3000, 0),
@@ -212,8 +229,9 @@ pts_ext = [
 ]
 wire_ext = Draft.makeWire(pts_ext, closed=True, face=False)
 doc.recompute()
+
 wall_outer = Arch.makeWall(wire_ext, width=200, height=3000, name="WallOuter")
-wall_outer.Align = "Center"
+wall_outer.Align = "Center"   # centra el muro sobre la línea base
 doc.recompute()
 
 # Partición interior: segmento simple
@@ -224,146 +242,186 @@ wall_vert.Align = "Center"
 doc.recompute()
 ```
 
-### Puertas y Ventanas (WindowPresets):
-* **Llamado Seguro:** Usa `Arch.makeWindowPreset` con tipos como `"Simple door"` o `"Open 1-pane"`.
-* **Parámetros sin Cero:** Los parámetros `width, height, h1, h2, w1, w2` deben ser estrictamente distintos de cero (`> 0`) para evitar excepciones de aborto.
-* **Bug Crítico de Placement:** La función `makeWindowPreset` de FreeCAD resetea el placement al origen internamente. **Solución:** Establece la propiedad `.Placement` del objeto *después* de crearlo.
-* **Orientación e Inversión de Giro:** Las puertas/ventanas se crean horizontales (plano XY). Debes rotarlas para alinearlas a la vertical del muro. 
-  * Para cambiar el sentido de apertura (ej. que abra hacia adentro en la dirección de las Y negativas), **NO** uses una rotación de $-90^\circ$ en X, ya que esto volcará la puerta hacia abajo (cota Z negativa).
-  * **Solución Correcta:** Rota la puerta $90^\circ$ en X, multiplica por una rotación de $180^\circ$ en Z, y ajusta la posición de su placement (offset de bisagra) para encajarla en el vano correspondiente.
+---
+
+### 6.4 Puertas y Ventanas (`Arch.makeWindowPreset`)
+
+* **Parámetros:** Todos deben ser `> 0` (`h1`, `h2`, `w1`, `w2`, etc.). Un valor 0 lanza una excepción.
+* **Bug de placement:** `makeWindowPreset` resetea el placement internamente. **Siempre asigna `.Placement` DESPUÉS de crearlo.**
+* **Rotación estándar** (puerta en pared horizontal, plano XY → vertical en muro):
 
 ```python
-door = Arch.makeWindowPreset("Simple door", width=800, height=2100, h1=50, h2=50, h3=0, w1=100, w2=40, o1=0, o2=40)
-# Rotación combinada de 90° en X y 180° en Z para abrir hacia el interior del baño (Y negativo)
-door_rot = App.Rotation(App.Vector(0, 0, 1), 180) * App.Rotation(App.Vector(1, 0, 0), 90)
-door.Placement = App.Placement(App.Vector(3400, 0, 0), door_rot)
+door = Arch.makeWindowPreset("Simple door", width=900, height=2100,
+                              h1=50, h2=50, h3=0, w1=100, w2=40, o1=0, o2=40)
+# Rotar 90° en X para poner la puerta vertical
+door.Placement = App.Placement(
+    App.Vector(-2000, -3000, 0),
+    App.Rotation(App.Vector(1, 0, 0), 90)
+)
+door.SymbolPlan = True   # muestra símbolo en planta
+door.Opening   = 90      # ángulo de apertura del arco
 doc.recompute()
-Arch.addComponents(door, wall_partition)
+Arch.addComponents(door, wall_outer)
+doc.recompute()
+
+# Puerta invertida (sentido opuesto): combinar rotaciones
+rot_inv = App.Rotation(App.Vector(0, 0, 1), 180) * App.Rotation(App.Vector(1, 0, 0), 90)
+door2.Placement = App.Placement(App.Vector(3400, 0, 0), rot_inv)
 ```
 
-### Organizar Elementos en Contenedores (BuildingPart/Floor):
-* **Bug de onChanged en Listas:** En ciertas versiones de FreeCAD, llamar a `floor.addObjects([obj1, obj2, ...])` pasando una lista completa de objetos puede generar excepciones silenciosas en el manejador de eventos `onChanged` de Python.
-* **Solución Segura:** Agrega los objetos uno a uno utilizando la versión singular del método `floor.addObject(obj)` de forma secuencial.
+---
 
-### Generación Headless de Planos 2D (DXF / SVG) y Alineación (InPlace):
-1. **SectionPlane:** Inserta un plano de corte horizontal (`Arch.makeSectionPlane`) a una altura de $1.5$ metros (`Z = 1500`) sobre el nivel del suelo.
-2. **Draft Shape2DView y Propiedad InPlace:** Genera las proyecciones 2D (líneas vistas y caras cortadas `"Cutfaces"`). **CRÍTICO:** Asegúrate de establecer `InPlace = True` en todas las proyecciones 2D. Si en alguna de ellas `InPlace` es `False`, FreeCAD trasladará su geometría proyectada al origen del espacio 3D, provocando un desalineamiento ("descuadre") masivo entre las líneas de contorno y el relleno de caras cortadas en la hoja final de TechDraw.
-3. **Exportación SVG:** Usa `importSVG.export` directamente sobre las vistas 2D.
-4. **Exportación DXF:** Usa una plantilla SVG vacía en un `TechDraw::DrawPage` y expórtala de forma 100% headless con `TechDraw.writeDXFPage`.
+### 6.5 Organizar en Contenedores (addObject uno a uno)
+
+> [!WARNING]
+> `floor.addObjects([obj1, obj2, ...])` puede lanzar excepciones silenciosas en el manejador `onChanged` de Python en algunas versiones de FreeCAD.
+
+**✅ Siempre agrega objetos de uno en uno:**
 
 ```python
-# 1. Crear el plano de corte
+floor.addObject(slab)
+floor.addObject(wall_outer)
+floor.addObject(wall_vert)
+floor.addObject(arc_main)   # arcos de giro
+doc.recompute()
+```
+
+---
+
+### 6.6 Simbología de Planta — Arcos de Giro de Puertas
+
+Las puertas están orientadas verticalmente (extruidas en Z). Una proyección top-down proyectaría el arco "de canto" como una línea recta. La solución: **dibujar el arco en Z=0 con `Draft.make_circle`**.
+
+```python
+# Arco de 90° (cuarto de círculo) en el plano del suelo
+arc = Draft.make_circle(
+    radius=900, face=False, startangle=0, endangle=90,
+    placement=App.Placement(App.Vector(-2450, -3000, 0), App.Rotation())
+)
+arc.Label = "SwingArc_Main"
+floor.addObject(arc)
+doc.recompute()
+```
+
+Y en el `SectionPlane`, habilitar la proyección de curvas 2D:
+```python
+section.OnlySolids = False  # incluye curvas Draft, no solo sólidos
+```
+
+---
+
+### 6.7 Plano de Corte y Proyecciones 2D
+
+#### Modos disponibles en `Shape2DView.ProjectionMode`:
+| Modo | Descripción |
+|---|---|
+| `"Solid"` | Líneas visibles de los sólidos desde la dirección de proyección |
+| `"Cutlines"` | Solo las líneas donde el plano de corte intersecta los sólidos |
+| `"Cutfaces"` | Caras rellenas donde el plano de corte intersecta (hachuras) |
+| `"Individual Faces"` | Cada cara proyectada individualmente |
+| `"Solid faces"` | Caras visibles de los sólidos |
+
+> [!NOTE]
+> No existe un modo `"All"`. Para un plano completo se usan **dos vistas**: `"Solid"` (contornos) + `"Cutfaces"` (relleno de muros).
+
+```python
 section = Arch.makeSectionPlane(floor, name="FloorPlanCut")
 section.Placement = App.Placement(App.Vector(0, 0, 1500), App.Rotation())
-section.OnlySolids = False  # Incluir curvas 2D (arcos de puertas)
+section.OnlySolids = False
 doc.recompute()
 
-# 2. Dos Shape2DViews con InPlace=True (coordenadas del mundo real)
-view_solid    = Draft.make_shape2dview(section)
-view_solid.InPlace = True
-view_solid.ProjectionMode = "Solid"     # Líneas visibles desde arriba
+view_solid = Draft.make_shape2dview(section)
+view_solid.Label         = "VisibleLinesView"
+view_solid.InPlace       = True        # CRÍTICO: mantiene coordenadas del mundo real
+view_solid.ProjectionMode = "Solid"
+doc.recompute()
 
 view_cutfaces = Draft.make_shape2dview(section)
-view_cutfaces.InPlace = True
-view_cutfaces.ProjectionMode = "Cutfaces"  # Relleno de sección
+view_cutfaces.Label         = "CutFacesView"
+view_cutfaces.InPlace       = True     # CRÍTICO: mismas coordenadas que view_solid
+view_cutfaces.ProjectionMode = "Cutfaces"
 doc.recompute()
+```
 
-# 3. CLAVE: fusionar en UN SOLO Part::Compound paramétrico
-# ⚠️ NO uses Part::Feature con .Shape asignado directamente —
-#    pierde la forma al siguiente doc.recompute() (no tiene DAG de dependencias).
-# ⚠️ NO uses dos DrawViewDraft separados en TechDraw —
-#    cada uno centra su vista en su propia bbox, causando el "descuadre".
-# ✅ Part::Compound con Links mantiene la referencia viva y persiste tras guardar/recargar.
-import Part
+> [!CAUTION]
+> **`InPlace = True` es obligatorio en AMBAS vistas.** Si `InPlace = False` en alguna, FreeCAD traslada esa vista al origen (0,0,0), mientras la otra permanece en las coordenadas reales del modelo. El resultado es un "descuadre" masivo entre contornos y relleno.
+
+---
+
+### 6.8 TechDraw sin Descuadre — `Part::Compound` + `DrawViewPart`
+
+Este es el patrón más importante y más costoso de descubrir.
+
+#### ¿Por qué desalinean dos `DrawViewDraft` separados?
+
+`TechDraw::DrawViewDraft` **centra** cada vista en la página según el centroide de su propia bounding box. Como `view_solid` (Z=0) y `view_cutfaces` (Z=1500) tienen bboxes con centroides distintos en Y (el solid incluye los arcos de giro que extienden Y hacia negativo), los dos `DrawViewDraft` se colocan en posiciones diferentes de la página → **descuadre**.
+
+#### ¿Por qué `Part::Feature.Shape` no funciona?
+
+```python
+# ❌ INCORRECTO - la forma se pierde en el siguiente recompute
+feat = doc.addObject("Part::Feature", "Compound")
+feat.Shape = Part.makeCompound([view_solid.Shape, view_cutfaces.Shape])
+doc.recompute()  # ← borra feat.Shape (no tiene DAG de dependencias)
+```
+
+#### ✅ Solución correcta — `Part::Compound` con `Links` (paramétrico)
+
+```python
+# Fusionar ambas vistas en un único objeto paramétrico
 compound = doc.addObject("Part::Compound", "FloorPlanCompound")
 compound.Links = [view_solid, view_cutfaces]
 doc.recompute()
-# Verificar bbox (debe coincidir con las dimensiones reales del edificio):
-# BBox X width ≈ largo del edificio, Y height ≈ ancho + swing arcs
 
-# 4. Una sola DrawViewPart en TechDraw (un solo bbox, cero desalineamiento)
-page = doc.addObject("TechDraw::DrawPage", "Page")
+# Verificar que la bbox tenga las dimensiones correctas del edificio:
+bb = compound.Shape.BoundBox
+print(f"Compound X width: {bb.XLength:.0f} mm")   # debe ≈ ancho del edificio
+print(f"Compound Y height: {bb.YLength:.0f} mm")  # debe ≈ largo + swing arcs
+
+# Una sola DrawViewPart → un solo centroide → sin descuadre
+page     = doc.addObject("TechDraw::DrawPage", "Page")
 template = doc.addObject("TechDraw::DrawSVGTemplate", "Template")
 template.Template = "/app/share/Mod/TechDraw/Templates/ISO/A3_Landscape_blank.svg"
 page.Template = template
 
-td_view = doc.addObject("TechDraw::DrawViewPart", "TD_FloorPlan")
+td_view            = doc.addObject("TechDraw::DrawViewPart", "TD_FloorPlan")
 td_view.Source     = [compound]
-td_view.Direction  = App.Vector(0, 0, -1)   # Vista desde arriba
+td_view.Direction  = App.Vector(0, 0, -1)   # vista desde arriba (top view)
 td_view.XDirection = App.Vector(1, 0, 0)    # X hacia la derecha
-td_view.Scale      = 0.02                   # Escala 1:50
+td_view.Scale      = 0.02                   # escala 1:50
 page.addView(td_view)
 doc.recompute()
-
-# 5. Exportar SVG y DXF
-import importSVG, TechDraw
-importSVG.export([view_solid, view_cutfaces], "/path/to/floor_plan.svg")
-TechDraw.writeDXFPage(page, "/path/to/floor_plan.dxf")
 ```
 
-### Simbología de Planta 2D (Arcos de Giro de Puertas):
-* **Proyección de Símbolos:** Las puertas verticales tienen su arco de giro (swing) en el plano vertical local, por lo que una proyección horizontal (`SectionPlane` mirando hacia abajo) proyectará el arco "de canto" como una simple línea recta.
-* **Solución Profesional:** Dibuja el arco de giro plano en el suelo ($Z = 0$) usando `Draft.make_circle` y especificando `startangle` y `endangle`. Asegúrate de desactivar `OnlySolids` en el `SectionPlane` (`section.OnlySolids = False`) para que las curvas y líneas 2D se proyecten en el plano final.
+---
+
+### 6.9 Exportación de Planos (SVG y DXF)
 
 ```python
-# Crear un arco de 90° de radio 900 con centro en las bisagras (hinge)
-hinge_pos = App.Vector(-2450, -3000, 0)
-arc = Draft.make_circle(radius=900, face=False, startangle=0, endangle=90, placement=App.Placement(hinge_pos, App.Rotation()))
-floor.addObject(arc)
+import importSVG, TechDraw
 
-# Habilitar proyección de curvas 2D en el plano de corte
-section.OnlySolids = False
+# SVG: exportar las vistas 2D directamente (coordenadas alineadas)
+importSVG.export([view_solid, view_cutfaces], "/ruta/floor_plan.svg")
+
+# DXF: exportar via TechDraw (headless, sin abrir GUI)
+TechDraw.writeDXFPage(page, "/ruta/floor_plan.dxf")
 ```
 
-### Bocetos Base (Sketch) y Visibilidad Headless:
-* **¿Por qué aparecen planos en el suelo?** Al crear una ventana/puerta con `makeWindowPreset`, FreeCAD genera un `Sketch` base en el plano local XY que contiene el contorno 2D parametrizado. La extrusión 3D se genera y luego se posiciona verticalmente mediante el `.Placement` de la ventana, pero el croquis base original permanece tumbado en el origen XY. Esto es correcto y normal en el modelado paramétrico.
-* **Control de Visibilidad Headless:** Para ocultar estos croquis base en la vista 3D y evitar ruido visual, se debe desactivar su visibilidad. Sin embargo, en modo consola (headless), el objeto `ViewObject` (que controla la GUI) no existe (`None`), por lo que intentar acceder a él directamente causará un error. Utiliza siempre esta función de seguridad:
+---
+
+### 6.10 Visibilidad Headless (Croquis Base de Puertas/Ventanas)
+
+`makeWindowPreset` genera un `Sketch` base en el plano XY. En modo headless el `ViewObject` es `None` — acceder directamente lanza `AttributeError`. Usa siempre este helper:
 
 ```python
 def set_visibility_safe(obj, visible=False):
     if hasattr(obj, "ViewObject") and obj.ViewObject is not None:
         obj.ViewObject.Visibility = visible
 
-# Ocultar el croquis base de forma segura
+# Ejemplo: ocultar el sketch base de una puerta
 set_visibility_safe(door.Base, False)
 ```
 
-### Inyección de GuiDocument.xml en Modo Headless (Fijar Visibilidades para la GUI):
-* **El Problema:** Al guardar un archivo `.FCStd` desde consola (`FreeCADCmd`), FreeCAD omite la creación del archivo `GuiDocument.xml` dentro del archivo ZIP. Al abrir el archivo en la aplicación de escritorio (GUI), FreeCAD regenera los valores predeterminados, lo que causa que contenedores (como `BuildingPart`) se inicialicen como **ocultos** (grayed out) y los bocetos base de ventanas/puertas como **visibles** (mostrándose como molestos cuadros planos en el viewport).
-* **La Solución:** Escribe un inyector programático de metadatos ZIP al final de tus scripts de automatización para generar un `GuiDocument.xml` correcto y empaquetarlo en el `.FCStd`.
-
-```python
-import zipfile
-import re
-import os
-
-def inject_gui_document(fcstd_path):
-    with zipfile.ZipFile(fcstd_path, 'r') as archive:
-        doc_xml = archive.read("Document.xml").decode("utf-8")
-    object_names = re.findall(r'<Object\s+name="([^"]+)"', doc_xml)
-    
-    visible_list = [n for n in object_names if not any(x in n for x in ["Sketch", "ExteriorWall", "InteriorWall"])]
-    hidden_list = [n for n in object_names if any(x in n for x in ["Sketch", "ExteriorWall", "InteriorWall"])]
-    
-    xml_content = f"""<?xml version='1.0' encoding='utf-8'?>
-<Document SchemaVersion="1" HasExpansion="1">
-    <Expand />
-    <ViewProviderData Count="{len(object_names)}">
-"""
-    for name in visible_list:
-        xml_content += f'        <ViewProvider name="{name}"><Properties Count="1"><Property name="Visibility" type="App::PropertyBool"><Bool value="true"/></Property></Properties></ViewProvider>\n'
-    for name in hidden_list:
-        xml_content += f'        <ViewProvider name="{name}"><Properties Count="1"><Property name="Visibility" type="App::PropertyBool"><Bool value="false"/></Property></Properties></ViewProvider>\n'
-    xml_content += "    </ViewProviderData>\n</Document>\n"
-    
-    temp_zip = fcstd_path + ".tmp"
-    with zipfile.ZipFile(fcstd_path, 'r') as zin, zipfile.ZipFile(temp_zip, 'w', zipfile.ZIP_DEFLATED) as zout:
-        for filename in zin.namelist():
-            if filename != "GuiDocument.xml":
-                zout.writestr(filename, zin.read(filename))
-        zout.writestr("GuiDocument.xml", xml_content)
-    os.replace(temp_zip, fcstd_path)
-```
-
-
+> [!NOTE]
+> **No inyectes `GuiDocument.xml` manualmente en el ZIP del `.FCStd`.** El lector C++ de FreeCAD es estricto con el esquema XML y fallará silenciosamente con el error `Reading failed from embedded file: GuiDocument.xml`, corrompiendo la carga del viewport (los ViewProviders quedan como enteros en lugar de objetos Python, generando `AttributeError: 'int' object has no attribute 'restoreConstraints'`). El archivo sigue siendo funcional al abrirse en FreeCAD GUI — simplemente la GUI recalcula los valores por defecto de visibilidad.
 
