@@ -79,7 +79,7 @@ TechDraw permite proyectar geometrías 3D en planos 2D normalizados.
 * **Orientación de la Vista:** La clase `TechDraw::DrawViewPart` no tiene la propiedad `UpDirection`. En su lugar, utiliza:
   * `Direction`: El vector de dirección de proyección normal a la hoja (ej. `App.Vector(0, -1, 0)`).
   * `XDirection`: El vector de dirección horizontal de la vista en la página (ej. `App.Vector(1, 0, 0)`).
-* **Filtros y Métodos Geométricos:** Utiliza `view.getVisibleEdges()` and `view.getHiddenEdges()` para interactuar programáticamente con las aristas proyectadas (evita el atributo inexistente `GeometryLines`).
+* **Filtros y Métodos Geométricos:** Utiliza `view.getVisibleEdges()` y `view.getHiddenEdges()` para interactuar programáticamente con las aristas proyectadas (evita el atributo inexistente `GeometryLines`).
 
 ```python
 import TechDraw
@@ -106,7 +106,7 @@ El banco de trabajo FEM interactúa con solvers (CalculiX) y generadores de mall
 
 ### Sincronización y Ciclo de Vida del Subproceso:
 * **Falta de Event Loop en Consola:** Cuando ejecutas FreeCAD mediante `-c` (sin interfaz Qt), los métodos asíncronos y los bucles basados en `QProcess.state()` no reciben eventos del loop de Qt. El objeto de malla o resolvedor puede ser destruido por el recolector de basura antes de completar la ejecución en disco.
-* **Solución Síncrona:** Espera activamente la ejecución del proceso invocando `waitForStarted(5000)` y `waitForFinished(-1)` sobre el objeto `process` del resolvedor/mesher.
+* **Solución Síncrona:** Espera activamente la ejecución del proceso invocando `waitForStarted(5000)` and `waitForFinished(-1)` sobre el objeto `process` del resolvedor/mesher.
 
 ```python
 from femmesh import netgentools
@@ -189,7 +189,50 @@ Al modificar geometrías paramétricas de FCGear vía Python, los nombres clave 
 
 ---
 
-## 6. Parches y Limitaciones de Entorno (Flatpak / Sandboxing)
+## 6. Automatización de Elementos de Unión (Addon Fasteners)
+
+El Addon `Fasteners` permite crear tornillos, pernos, tuercas, arandelas y pasadores normalizados bajo estándares internacionales (ISO, DIN, ASME, etc.).
+
+### Inicialización y Creación por Código:
+Para instanciar un elemento de unión:
+1. Agrega el directorio del Addon a `sys.path` (ej. `/home/aster/.local/share/FreeCAD/Mod/Fasteners`).
+2. Obtén el nombre del tipo interno C++ usando `ScrewMaker.Instance.GetTypeName("STANDARD")` (ej. para `"DIN933"` o `"DIN934"`).
+3. Añade el objeto al documento con `addObject("Part::FeaturePython", type_name)` y asócialo al envoltorio de Python con `FastenersCmd.FSScrewObject(obj, "STANDARD", None)`.
+
+```python
+import sys
+sys.path.append("/home/aster/.local/share/FreeCAD/Mod/Fasteners")
+import FastenersCmd
+import ScrewMaker
+
+doc = App.activeDocument()
+# Obtener el tipo de objeto para DIN933 (tornillo hexagonal)
+type_name = ScrewMaker.Instance.GetTypeName("DIN933")
+screw = doc.addObject("Part::FeaturePython", type_name)
+FastenersCmd.FSScrewObject(screw, "DIN933", None)
+```
+
+### Regla Crítica de Asignación de Propiedades (Diameter y Length):
+Las propiedades de tamaño en Fasteners son enumeraciones dinámicas dependientes.
+* **El Error de Restricción (`ValueError`):** Si cambias el diámetro (`Diameter`) y luego cambias inmediatamente la longitud (`Length`) sin actualizar el documento, se lanzará una excepción indicando que la longitud no pertenece al conjunto de valores permitidos. Esto se debe a que la lista de longitudes válidas se restringe y valida dinámicamente según el diámetro actual del tornillo en la base de datos de C++.
+* **La Solución:** Debes llamar a `doc.recompute()` inmediatamente después de modificar `Diameter` y antes de asignar `Length`.
+
+```python
+# 1. Asignar el diámetro
+screw.Diameter = "M8"
+# 2. Recomputar el documento para refrescar las restricciones de longitud en C++
+doc.recompute()
+# 3. Asignar la longitud (ahora '40' es válido para 'M8')
+screw.Length = "40"
+
+# Activar la generación física del roscado (genera rosca real 3D)
+screw.Thread = True 
+doc.recompute()
+```
+
+---
+
+## 7. Parches y Limitaciones de Entorno (Flatpak / Sandboxing)
 
 En entornos Flatpak, el backend de Netgen puede fallar al convertir parámetros booleanos o flotantes en la capa C++ de `pybind11` (`MeshingParameters`).
 
