@@ -75,7 +75,7 @@ valor_evaluado = float(sheet.get("B2"))
 TechDraw permite proyectar geometrías 3D en planos 2D normalizados.
 
 ### Configuración Correcta de Vistas en Python:
-* **Asociación de Plantilla Obligatoria:** Antes de añadir cualquier vista a la página con `page.addView(view)`, la página debe tener cargada una plantilla (`page.Template = template`). De lo contrario, se lanzará una excepción.
+* **Asociación de Plantilla Oro:** Antes de añadir cualquier vista a la página con `page.addView(view)`, la página debe tener cargada una plantilla (`page.Template = template`). De lo contrario, se lanzará una excepción.
 * **Orientación de la Vista:** La clase `TechDraw::DrawViewPart` no tiene la propiedad `UpDirection`. En su lugar, utiliza:
   * `Direction`: El vector de dirección de proyección normal a la hoja (ej. `App.Vector(0, -1, 0)`).
   * `XDirection`: El vector de dirección horizontal de la vista en la página (ej. `App.Vector(1, 0, 0)`).
@@ -102,9 +102,9 @@ doc.recompute()
 
 ## 4. Ejecución FEM en Modo Headless (Línea de Comandos / CI)
 
-El banco de trabajo FEM interactúa con solvers (CalculiX) y generadores de malla (Netgen/Gmsh) mediante subprocesos (`QProcess`).
+El banco de trabajo FEM interactúa con solvers (CalculiX) y generadores de malla (Netgen/Gmsh) mediante subprocesos (`QProcess` o `subprocess`).
 
-### Sincronización y Ciclo de Vida del Subproceso:
+### Mallado Síncrono (Netgen):
 * **Falta de Event Loop en Consola:** Cuando ejecutas FreeCAD mediante `-c` (sin interfaz Qt), los métodos asíncronos y los bucles basados en `QProcess.state()` no reciben eventos del loop de Qt. El objeto de malla o resolvedor puede ser destruido por el recolector de basura antes de completar la ejecución en disco.
 * **Solución Síncrona:** Espera activamente la ejecución del proceso invocando `waitForStarted(5000)` y `waitForFinished(-1)` sobre el objeto `process` del resolvedor/mesher.
 
@@ -136,14 +136,68 @@ if nt.process.exitCode() == 0:
    mesh_obj.Glue = False
    mesh_obj.HealShape = False
    ```
-4. **Propiedades de Resultados:** Para contar los elementos generados en el objeto de malla cargado, accede a:
-   * `mesh_obj.FemMesh.NodeCount` o `len(mesh_obj.FemMesh.Nodes)`
-   * `mesh_obj.FemMesh.VolumeCount`
-   * `mesh_obj.FemMesh.FaceCount`
 
 ---
 
-## 5. Carga y Uso de Addons Mecánicos Externos (ej. FCGear)
+## 5. Automatización del Solver FEM CalculiX (ccx)
+
+CalculiX es el resolvedor estructural y térmico integrado por defecto en FreeCAD.
+
+### Definición Completa del Modelo Estructural:
+1. **Solver CalculiX:** Se instancia mediante la API `ObjectsFem.makeSolverCalculiXCcxTools(doc, "CalculiXCcxTools")` (de tipo `Fem::FemSolverObjectPython`).
+2. **Material Sólido:** Carga un material con constantes mecánicas:
+   ```python
+   material = ObjectsFem.makeMaterialSolid(doc, "Steel")
+   mat = material.Material
+   mat["Name"] = "Steel"
+   mat["YoungsModulus"] = "210000 MPa"  # Requerido con unidades
+   mat["PoissonRatio"] = "0.30"
+   material.Material = mat
+   analysis.addObject(material)
+   ```
+3. **Restricción de Soporte Fijo (Fixed Constraint):** Asocia una restricción rígida sobre una cara o borde del sólido:
+   ```python
+   fixed = ObjectsFem.makeConstraintFixed(doc, "Fixed")
+   fixed.References = [(geometry, "Face1")]  # Tupla objeto - cara
+   analysis.addObject(fixed)
+   ```
+4. **Restricción de Fuerza / Carga:** Aplica una carga direccionada sobre otra cara:
+   ```python
+   force = ObjectsFem.makeConstraintForce(doc, "Force")
+   force.References = [(geometry, "Face6")]
+   force.Force = "1000.0 N"
+   force.Direction = (geometry, ["Face6"]) # Dirección normal a la cara
+   force.Reversed = True  # Invierte dirección si es necesario
+   analysis.addObject(force)
+   ```
+
+### Ejecución Síncrona del Resolvedor:
+Usa el envoltorio `FemToolsCcx` del módulo `femtools.ccxtools`. La llamada al método `.run()` es síncrona en scripts, bloqueando la consola hasta que CalculiX termina de calcular y carga los resultados de vuelta en el árbol de FreeCAD:
+
+```python
+from femtools import ccxtools
+# Inicializar herramienta ccx pasándole la estructura del análisis y el solver
+fea = ccxtools.FemToolsCcx(analysis, solver)
+fea.update_objects()
+success = fea.run() # Escribe .inp, ejecuta ccx y carga los resultados .frd/.dat
+
+if success:
+    doc.recompute()
+    print("CalculiX ha resuelto la física correctamente.")
+```
+
+### Extracción de Resultados (Desplazamiento y Tensión):
+Una vez resuelto el análisis, CalculiX crea un objeto en el documento con el nombre `CCX_Results` (de tipo `Fem::FemResultObjectPython`). Puedes consultar sus métricas de dos maneras:
+1. **Acceso Directo (Velocidad):** Las propiedades contienen listas ordenadas por nodo:
+   * Desplazamiento de nodos en mm: `max(res_obj.DisplacementLengths)`
+   * Tensiones de Von Mises en MPa: `max(res_obj.vonMises)`
+2. **Uso de resulttools (Modular):** Usando `from femresult import resulttools`:
+   * `resulttools.get_stats(res_obj, "Uabs")` (retorna tupla `(min, max)` de desplazamientos).
+   * `resulttools.get_stats(res_obj, "Sabs")` (retorna tupla `(min, max)` de tensiones de Von Mises).
+
+---
+
+## 6. Carga y Uso de Addons Mecánicos Externos (ej. FCGear)
 
 Para crear componentes mecánicos avanzados como engranajes rectos, helicoidales, cónicos o sinfines, se suelen usar Addons externos como `FCGear`.
 
@@ -165,7 +219,7 @@ fcgear_base = "/home/aster/.local/share/FreeCAD/Mod/FCGear"
 if fcgear_base not in sys.path:
     sys.path.append(fcgear_base)
 
-# 3. Importar freecad and extender su ruta de búsqueda para subpaquetes
+# 3. Importar freecad y extender su ruta de búsqueda para subpaquetes
 import freecad
 fcgear_addon = "/home/aster/.local/share/FreeCAD/Mod/FCGear/freecad"
 if fcgear_addon not in freecad.__path__:
@@ -189,7 +243,7 @@ Al modificar geometrías paramétricas de FCGear vía Python, los nombres clave 
 
 ---
 
-## 6. Automatización de Elementos de Unión (Addon Fasteners)
+## 7. Automatización de Elementos de Unión (Addon Fasteners)
 
 El Addon `Fasteners` permite crear tornillos, pernos, tuercas, arandelas y pasadores normalizados bajo estándares internacionales (ISO, DIN, ASME, etc.).
 
@@ -232,7 +286,7 @@ doc.recompute()
 
 ---
 
-## 7. Creación de Animaciones Mecánicas en FreeCAD
+## 8. Creación de Animaciones Mecánicas en FreeCAD
 
 Para animar piezas móviles acopladas (como engranajes mesheados) vinculando sus posiciones angulares:
 
@@ -267,7 +321,7 @@ class GearAnimator(QtWidgets.QDialog):
 
 ---
 
-## 8. Parches y Limitaciones de Entorno (Flatpak / Sandboxing)
+## 9. Parches y Limitaciones de Entorno (Flatpak / Sandboxing)
 
 En entornos Flatpak, el backend de Netgen puede fallar al convertir parámetros booleanos o flotantes en la capa C++ de `pybind11` (`MeshingParameters`).
 
