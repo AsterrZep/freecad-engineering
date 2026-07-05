@@ -424,7 +424,42 @@ Antes de la exportación a STL para impresión 3D, puedes validar programáticam
 
 ---
 
-## 11. Parches y Limitaciones de Entorno (Flatpak / Sandboxing)
+## 11. Telemetría y Diagnóstico Automático (FreeCAD.log)
+
+El análisis automatizado de los logs internos del motor de FreeCAD es crucial para capturar advertencias y errores silenciosos en la ejecución de scripts (headless).
+
+### Activación del Registro de Logs en Consola:
+Para forzar a FreeCAD a escribir logs durante la ejecución de scripts CLI, inicia el contenedor con la opción `-l` o `--write-log`:
+```bash
+flatpak run org.freecad.FreeCAD -l -c /path/to/script.py
+```
+Esto creará el archivo de log en la ruta de datos del usuario Flatpak:
+`~/.var/app/org.freecad.FreeCAD/data/FreeCAD/v1-1/FreeCAD.log`
+
+### Script de Diagnóstico de Logs (Parser de Patrones):
+Puedes automatizar la inspección analizando las ocurrencias en el archivo de log utilizando expresiones regulares en Python:
+
+```python
+import re
+import os
+
+LOG_PATH = os.path.expanduser("~/.var/app/org.freecad.FreeCAD/data/FreeCAD/v1-1/FreeCAD.log")
+
+# Buscar patrones de Warning y Error
+warn_pattern = re.compile(r'^(Wrn|Warning|Warn):\s*(.*)', re.IGNORECASE)
+err_pattern = re.compile(r'^(Err|Error):\s*(.*)', re.IGNORECASE)
+
+with open(LOG_PATH, 'r', encoding='utf-8', errors='ignore') as f:
+    for line_num, line in enumerate(f, 1):
+        if err_pattern.match(line) or "blocked import" in line.lower() or "exception" in line.lower():
+            print(f"🟥 Error en Línea {line_num}: {line.strip()}")
+        elif warn_pattern.match(line) or "warning:" in line.lower():
+            print(f"🟨 Advertencia en Línea {line_num}: {line.strip()}")
+```
+
+---
+
+## 12. Parches y Limitaciones de Entorno (Flatpak / Sandboxing)
 
 En entornos Flatpak, el backend de Netgen puede fallar al convertir parámetros booleanos o flotantes en la capa C++ de `pybind11` (`MeshingParameters`).
 
