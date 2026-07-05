@@ -224,9 +224,13 @@ doc.recompute()
 Arch.addComponents(door, wall_partition)
 ```
 
-### Generación Headless de Planos 2D (DXF / SVG):
+### Organizar Elementos en Contenedores (BuildingPart/Floor):
+* **Bug de onChanged en Listas:** En ciertas versiones de FreeCAD, llamar a `floor.addObjects([obj1, obj2, ...])` pasando una lista completa de objetos puede generar excepciones silenciosas en el manejador de eventos `onChanged` de Python.
+* **Solución Segura:** Agrega los objetos uno a uno utilizando la versión singular del método `floor.addObject(obj)` de forma secuencial.
+
+### Generación Headless de Planos 2D (DXF / SVG) y Alineación (InPlace):
 1. **SectionPlane:** Inserta un plano de corte horizontal (`Arch.makeSectionPlane`) a una altura de $1.5$ metros (`Z = 1500`) sobre el nivel del suelo.
-2. **Draft Shape2DView:** Genera las proyecciones 2D (líneas vistas y caras cortadas `"Cutfaces"`).
+2. **Draft Shape2DView y Propiedad InPlace:** Genera las proyecciones 2D (líneas vistas y caras cortadas `"Cutfaces"`). **CRÍTICO:** Asegúrate de establecer `InPlace = True` en todas las proyecciones 2D. Si en alguna de ellas `InPlace` es `False`, FreeCAD trasladará su geometría proyectada al origen del espacio 3D, provocando un desalineamiento ("descuadre") masivo entre las líneas de contorno y el relleno de caras cortadas en la hoja final de TechDraw.
 3. **Exportación SVG:** Usa `importSVG.export` directamente sobre las vistas 2D.
 4. **Exportación DXF:** Usa una plantilla SVG vacía en un `TechDraw::DrawPage` y expórtala de forma 100% headless con `TechDraw.writeDXFPage`.
 
@@ -236,9 +240,12 @@ section = Arch.makeSectionPlane(floor, name="FloorPlanCut")
 section.Placement = App.Placement(App.Vector(0, 0, 1500), App.Rotation())
 doc.recompute()
 
-# 2. Generar vistas 2D
+# 2. Generar vistas 2D alineadas
 visible_view = Draft.make_shape2dview(section)
+visible_view.InPlace = True
+
 cut_view = Draft.make_shape2dview(section)
+cut_view.InPlace = True
 cut_view.ProjectionMode = "Cutfaces"
 doc.recompute()
 
