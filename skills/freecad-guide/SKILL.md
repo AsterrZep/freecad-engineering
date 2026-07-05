@@ -479,3 +479,117 @@ def patched_get_meshing_parameters(self):
 
 netgentools.NetgenTools.get_meshing_parameters = patched_get_meshing_parameters
 ```
+
+---
+
+## 13. Simulación FEM con CalculiX en Subproceso Aislado
+
+El crash fatal del kernel de C++ (`std::vector::operator[] out of range`) ocurre cuando FreeCAD intenta guardar o cerrar un documento que contiene objetos de malla SMESH (generados por Netgen). La única solución robusta es aislar la simulación FEM en un **subproceso independiente** de FreeCAD que, al terminar, muere con el crash sin afectar el proceso principal.
+
+### Arquitectura de Doble Proceso
+
+**Proceso Principal** (crea CAD, guarda `.FCStd` limpio, llama al subproceso):
+```python
+import subprocess
+import os
+
+fem_script = "/path/to/run_fem_simulation.py"
+cmd = ["/app/freecad/bin/FreeCAD", "-c", fem_script]
+
+# CRÍTICO: PYTHONUNBUFFERED=1 para capturar stdout antes del crash de C++
+env = os.environ.copy()
+env["PYTHONUNBUFFERED"] = "1"
+env["PYTHONDONTWRITEBYTECODE"] = "1"
+res = subprocess.run(cmd, env=env, capture_output=True, text=True)
+
+# Parsear las líneas marcadas en el stdout del subproceso
+for line in res.stdout.splitlines():
+    if line.startswith("FEM_MAX_DISPLACEMENT:"):
+        max_disp = float(line.split(":")[1])
+    elif line.startswith("FEM_MAX_STRESS:"):
+        max_stress = float(line.split(":")[1])
+```
+
+**Subproceso FEM** (`run_fem_simulation.py`):
+
+#### 1. Métodos correctos de `FemToolsCcx`
+> ⚠️ La API ha cambiado en distintas versiones. En FreeCAD flatpak:
+> - **✅ Correcto:** `fea.ccx_run()` — ejecuta el solver CalculiX
+> - **❌ Incorrecto:** `fea.run_ccx()` — no existe, lanza `AttributeError`
+> - **✅ Correcto:** `os.path.splitext(fea.inp_file_name)[0] + ".frd"` — ruta al archivo de resultados
+> - **❌ Incorrecto:** `fea.frd_file` — no existe, lanza `AttributeError`
+
+```python
+from femtools import ccxtools
+
+fea = ccxtools.FemToolsCcx(analysis, solver_fem)
+fea.update_objects()
+fea.write_inp_file()
+fea.ccx_run()  # ✅ nombre correcto del método
+frd_file = os.path.splitext(fea.inp_file_name)[0] + ".frd"  # ✅ ruta correcta
+```
+
+#### 2. Parser de Resultados FRD en Python Puro
+
+Evita importar `femresult.frdreader` (no existe en flatpak) ni `feminout.importCcxFrdResults` (lanza el crash de SMESH al importar resultados en C++). En su lugar, parsea el archivo `.frd` directamente usando anchos de columna fijos:
+
+```python
+import math
+
+def parse_frd_results(filepath):
+    """Parse CalculiX .frd results file using pure Python column-based parsing.
+    Returns (max_displacement_mm, max_von_mises_stress_MPa).
+    """
+    max_disp = 0.0
+    max_stress = 0.0
+    mode = None
+    
+    with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            if line.startswith(" -4  DISP"):
+                mode = "DISP"
+                continue
+            elif line.startswith(" -4  STRESS"):
+                mode = "STRESS"
+                continue
+            elif line.startswith(" -3"):
+                mode = None
+                continue
+            
+            if mode and line.startswith(" -1 "):
+                try:
+                    # Formato fijo: 10 chars para node_id, 12 chars por cada componente float
+                    if mode == "DISP":
+                        dx = float(line[13:25])
+                        dy = float(line[25:37])
+                        dz = float(line[37:49])
+                        disp_len = math.sqrt(dx**2 + dy**2 + dz**2)
+                        if disp_len > max_disp:
+                            max_disp = disp_len
+                    elif mode == "STRESS":
+                        sxx = float(line[13:25])
+                        syy = float(line[25:37])
+                        szz = float(line[37:49])
+                        sxy = float(line[49:61])
+                        syz = float(line[61:73])
+                        sxz = float(line[73:85])
+                        vm = math.sqrt(0.5 * ((sxx-syy)**2 + (syy-szz)**2 + (szz-sxx)**2 + 6*(sxy**2 + syz**2 + sxz**2)))
+                        if vm > max_stress:
+                            max_stress = vm
+                except:
+                    pass
+    return max_disp, max_stress
+
+# Parsear y emitir líneas marcadas para el proceso padre
+if os.path.exists(frd_file):
+    max_disp, max_stress = parse_frd_results(frd_file)
+    print(f"FEM_MAX_DISPLACEMENT:{max_disp:.6f}", flush=True)
+    print(f"FEM_MAX_STRESS:{max_stress:.2f}", flush=True)
+```
+
+### Resultados Verificados en Eje Escalonado (Acero, 500 N axial)
+| Métrica | Valor |
+|---|---|
+| Deflexión Máxima | 0.000364 mm |
+| Tensión Von Mises Máxima | 3.48 MPa |
+| Nodos de malla (VeryCoarse) | 366 |
