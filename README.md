@@ -59,14 +59,20 @@ graph TD
 
 ## 🚀 Instalación y Uso
 
-### 1. Clonar en la ruta de plugins del agente
+### Opción 1: Instalar directamente mediante Antigravity CLI (Recomendado)
+Puedes instalar el plugin ejecutando el comando de instalación directamente en tu terminal:
+```bash
+agy plugin install git@github.com:AsterrZep/freecad-engineering.git
+```
+
+### Opción 2: Instalación manual (Git Clone)
+Si lo prefieres, puedes clonar manualmente el repositorio dentro del directorio de plugins de Antigravity:
 ```bash
 git clone git@github.com:AsterrZep/freecad-engineering.git \
   ~/.gemini/config/plugins/freecad-engineering
 ```
 
-### 2. Verificar la carga del plugin
-Una vez clonado, reinicia tu entorno de Antigravity CLI. El agente tendrá acceso inmediato a la guía integrada a través de su corpus de skills (`freecad-guide`).
+Una vez instalado, reinicia tu sesión de Antigravity CLI. El agente detectará automáticamente el plugin y tendrá acceso a la guía integrada a través de su skill (`freecad-guide`).
 
 ---
 
