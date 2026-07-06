@@ -1,3 +1,8 @@
 {
-  "name": "freecad-engineering"
+  "name": "freecad-engineering",
+  "version": "1.0.0",
+  "description": "Guía avanzada de modelado paramétrico, BIM/arquitectónico, FEM y TechDraw para FreeCAD con Antigravity CLI",
+  "author": "AsterrZep",
+  "license": "MIT",
+  "keywords": ["freecad", "bim", "architecture", "fem", "techdraw", "parametric", "headless", "python"]
 }
