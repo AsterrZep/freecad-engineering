@@ -6,6 +6,9 @@
 
 Plugin de [Antigravity CLI](https://antigravity.dev) que extiende al agente con una **guía de referencia completa y validada** para automatización y modelado paramétrico avanzado en FreeCAD mediante Python en modo headless (`FreeCADCmd`).
 
+> [!WARNING]
+> **Proyecto en Desarrollo:** Este plugin y su documentación asociada se encuentran en fase activa de desarrollo. Pueden existir fallas no previstas, cambios de API en versiones futuras de FreeCAD o comportamientos inesperados dependiendo del entorno de ejecución.
+
 ---
 
 ## 🗺️ Mapa de Contenidos (SKILL.md)
