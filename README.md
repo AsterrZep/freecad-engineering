@@ -62,7 +62,7 @@ graph TD
 ### Opción 1: Instalar directamente mediante Antigravity CLI (Recomendado)
 Puedes instalar el plugin ejecutando el comando de instalación directamente en tu terminal:
 ```bash
-agy plugin install git@github.com:AsterrZep/freecad-engineering.git
+agy plugin install https://github.com/AsterrZep/freecad-engineering.git
 ```
 
 ### Opción 2: Instalación manual (Git Clone)
